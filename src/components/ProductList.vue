@@ -3,6 +3,7 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '../utils/request'
 import Papa from 'papaparse'  // 添加这一行
+import { Upload, Picture } from '@element-plus/icons-vue'
 
 // 产品列表数据
 const products = ref([])
@@ -15,7 +16,7 @@ const editingProduct = ref({
   price: 0,
   stock: 0,
   imageUrl: '', // 添加imageUrl字段
-  status: '可用' // 默认为可用状态
+  status: 'AVAILABLE' // 默认为可用状态
 })
 const isEdit = ref(false)
 
@@ -40,10 +41,6 @@ const rules = {
   stock: [
     { required: true, message: '请输入库存数量', trigger: 'blur' },
     { type: 'number', min: 0, message: '库存必须大于等于 0', trigger: 'blur' }
-  ],
-  imageUrl: [
-    { required: true, message: '请输入商品图片链接', trigger: 'blur' },
-    { type: 'url', message: '请输入有效的URL地址', trigger: 'blur' }
   ],
   status: [
     { required: true, message: '请选择商品状态', trigger: 'change' }
@@ -157,11 +154,18 @@ const handleSave = async () => {
     const url = isEdit.value ? `/products/${editingProduct.value.id}` : '/products'
     const method = isEdit.value ? 'put' : 'post'
     
-    await request[method](url, editingProduct.value)
+    // 确保 imageUrl 被包含在发送的数据中
+    const productData = {
+      ...editingProduct.value,
+      imageUrl: editingProduct.value.imageUrl || '' // 确保即使没有图片也发送空字符串
+    }
+    
+    await request[method](url, productData)
     ElMessage.success(isEdit.value ? '更新成功' : '创建成功')
     dialogVisible.value = false
     await fetchProducts()
   } catch (error) {
+    console.error('保存失败:', error)
     ElMessage.error(isEdit.value ? '更新失败' : '创建失败')
   }
 }
@@ -271,6 +275,80 @@ onBeforeUnmount(() => {
     isMobile.value = window.innerWidth <= 768
   })
 })
+
+// 添加商品表单
+const productForm = ref({
+  name: '',
+  description: '',
+  price: 0,
+  stock: 0,
+  imageUrl: '',
+  imageFile: null
+})
+
+// 修改上传图片处理函数
+const handleImageUpload = async (event) => {
+  const file = event.target.files[0]
+  if (!file) return
+  
+  // 验证文件类型
+  const allowedTypes = ['image/jpeg', 'image/png', 'image/gif']
+  if (!allowedTypes.includes(file.type)) {
+    ElMessage.error('只支持 JPG、PNG、GIF 格式的图片')
+    return
+  }
+
+  // 验证文件大小（5MB）
+  if (file.size > 5 * 1024 * 1024) {
+    ElMessage.error('图片大小不能超过5MB')
+    return
+  }
+
+  // 先显示本地预览
+  editingProduct.value.imageUrl = URL.createObjectURL(file)
+
+  // 上传图片并获取URL
+  const imageUrl = await uploadImage(file)
+  if (imageUrl) {
+    // 更新商品的图片URL
+    editingProduct.value.imageUrl = imageUrl
+    ElMessage.success('图片上传成功')
+  }
+}
+
+// 修改上传图片到服务器的函数
+const uploadImage = async (file) => {
+  const formData = new FormData()
+  formData.append('file', file)
+
+  try {
+    loading.value = true
+    const response = await request.post('/upload/image', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data'
+      }
+    })
+
+    if (response.url) {
+      // 只存储图片URL,不立即更新UI
+      return response.url
+    } else {
+      throw new Error('上传失败')
+    }
+  } catch (error) {
+    console.error('图片上传失败:', error)
+    ElMessage.error('图片上传失败')
+    return null
+  } finally {
+    loading.value = false
+  }
+}
+
+// 移除图片
+const removeImage = () => {
+  productForm.value.imageUrl = ''
+  productForm.value.imageFile = null
+}
 </script>
 
 <template>
@@ -491,12 +569,6 @@ onBeforeUnmount(() => {
             style="width: 200px"
           />
         </el-form-item>
-        <el-form-item label="图片URL" prop="imageUrl">
-          <el-input 
-            v-model="editingProduct.imageUrl" 
-            placeholder="请输入商品图片URL"
-          />
-        </el-form-item>
         <el-form-item label="状态" prop="status">
           <el-select v-model="editingProduct.status">
             <el-option
@@ -507,6 +579,36 @@ onBeforeUnmount(() => {
             />
           </el-select>
         </el-form-item>
+        <el-form-item label="商品图片">
+          <div class="image-uploader">
+            <div 
+              v-if="!editingProduct.imageUrl" 
+              class="image-upload-trigger"
+            >
+              <input
+                type="file"
+                accept="image/*"
+                class="file-input"
+                @change="handleImageUpload"
+              >
+              <el-icon><Upload /></el-icon>
+              <span>点击上传图片</span>
+            </div>
+            <div v-else class="image-preview">
+              <img :src="editingProduct.imageUrl" class="preview-image">
+              <div class="image-actions">
+                <el-button 
+                  type="danger" 
+                  size="small" 
+                  circle
+                  @click="editingProduct.imageUrl = ''"
+                >
+                  <el-icon><Delete /></el-icon>
+                </el-button>
+              </div>
+            </div>
+          </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -516,13 +618,21 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <!-- 图片预览对话框 -->
+    <!-- 修改图片预览组件 -->
     <el-dialog v-model="previewVisible" title="图片预览" width="800px">
       <el-image
         :src="previewImage"
         style="width: 100%"
         fit="contain"
-      />
+        :preview-src-list="previewImage ? [previewImage] : []"
+      >
+        <template #error>
+          <div class="image-error">
+            <el-icon><Picture /></el-icon>
+            <span>图片加载失败</span>
+          </div>
+        </template>
+      </el-image>
     </el-dialog>
   </div>
 </template>
@@ -756,6 +866,99 @@ onBeforeUnmount(() => {
   :deep(.el-dialog__body) {
     padding: 15px !important;
   }
+}
+
+.image-uploader {
+  width: 200px;
+  height: 200px;
+  border: 1px dashed #d9d9d9;
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.3s;
+}
+
+.image-uploader:hover {
+  border-color: #409eff;
+}
+
+.image-upload-trigger {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.3s;
+}
+
+.image-upload-trigger:hover {
+  border-color: #409eff;
+  color: #409eff;
+}
+
+.file-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.image-preview {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.preview-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-actions {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 50%;
+}
+
+.image-preview:hover .image-actions {
+  display: block;
+}
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .image-uploader {
+    width: 150px;
+    height: 150px;
+  }
+
+  .image-actions {
+    display: block;
+  }
+}
+
+.image-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 200px;
+  color: #909399;
+  font-size: 14px;
+  background: #f5f7fa;
+}
+
+.image-error .el-icon {
+  font-size: 48px;
+  margin-bottom: 8px;
 }
 </style>
 

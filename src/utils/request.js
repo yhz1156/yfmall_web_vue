@@ -2,8 +2,8 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
 const request = axios.create({
-   baseURL: 'http://localhost:9000/api',
-  //baseURL: 'http://mall.yellow-fish.cn/api',
+   //baseURL: 'http://localhost:9000/api',
+  baseURL: 'http://mall.yellow-fish.cn/api',
   timeout: 5000,
   headers: {
     'Content-Type': 'application/json'
